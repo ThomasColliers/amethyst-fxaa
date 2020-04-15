@@ -1,21 +1,23 @@
 // Custom `RenderPlugin` to render fxaa post-processing to be used with `RenderingBundle`
 
 use amethyst::renderer::{
-    bundle::{Target, TargetImage, RenderOrder, RenderPlan, RenderPlugin},
+    bundle::{Target, TargetImage, RenderOrder, RenderPlan, RenderPlugin, ImageOptions, OutputColor, TargetPlanOutputs },
     Backend, Factory,
     submodules::{DynamicUniform},
     pipeline::{PipelineDescBuilder, PipelinesBuilder},
     util,
+    pass::*,
+    Kind,
 };
 use amethyst::{
-    ecs::{World},
+    ecs::{World,ReadExpect},
     error::Error,
     prelude::*,
     window::ScreenDimensions,
 };
 use rendy::{
-    command::{QueueId, RenderPassEncoder},
-    hal::{self, device::Device, pso, pso::ShaderStageFlags, format::Format},
+    command::{QueueId, RenderPassEncoder },
+    hal::{self, device::Device, pso, pso::ShaderStageFlags, format::Format, command::ClearValue, command::ClearDepthStencil },
     graph::{
         render::{PrepareResult, RenderGroup, RenderGroupDesc},
         GraphContext, NodeBuffer, NodeImage, ImageId
@@ -33,6 +35,8 @@ use glsl_layout::*;
 #[derive(Default, Debug)]
 pub struct RenderFXAA {
     target: Target,
+    dirty: bool,
+    dimensions: Option<ScreenDimensions>,
 }
 
 impl RenderFXAA {
@@ -43,12 +47,47 @@ impl RenderFXAA {
 }
 
 impl<B: Backend> RenderPlugin<B> for RenderFXAA {
+    fn should_rebuild(&mut self, world: &World) -> bool {
+        let new_dimensions = world.try_fetch::<ScreenDimensions>();
+        if self.dimensions.as_ref() != new_dimensions.as_deref() {
+            self.dirty = true;
+            self.dimensions = new_dimensions.map(|d| (*d).clone());
+            return false;
+        }
+        self.dirty
+    }
+
     fn on_plan(
         &mut self,
         plan: &mut RenderPlan<B>,
         _factory: &mut Factory<B>,
         _world: &World
     ) -> Result<(), Error> {
+        self.dirty = false;
+
+        // try and add our pass first
+        let dimensions = self.dimensions.as_ref().unwrap();
+        let kind = Kind::D2(dimensions.width() as u32, dimensions.height() as u32, 1, 1);
+        let depth_options = ImageOptions {
+            kind: kind,
+            levels: 1,
+            format: Format::D32Sfloat,
+            clear: Some(ClearValue::DepthStencil(ClearDepthStencil(1.0, 0))),
+        };
+        plan.add_root(Target::Custom("offscreen"));
+        plan.define_pass(
+            Target::Custom("offscreen"),
+            TargetPlanOutputs {
+                colors: vec![OutputColor::Image(ImageOptions {
+                    kind:kind,
+                    levels: 1,
+                    format: Format::Rgb8Unorm,
+                    clear: None,
+                })],
+                depth: Some(depth_options)
+            }
+        )?;
+
         plan.extend_target(self.target, |ctx| {
             let source_image = TargetImage::Color(Target::Custom("offscreen"), 0);
             let source_id = ctx.get_image(source_image).unwrap();
@@ -58,6 +97,7 @@ impl<B: Backend> RenderPlugin<B> for RenderFXAA {
             )?;
             Ok(())
         });
+
         Ok(())
     }
 }
