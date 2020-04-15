@@ -1,0 +1,19 @@
+[package]
+name = "amethyst-fxaa"
+version = "0.1.0"
+authors = ["Thomas Colliers <mail@thomascolliers.com>"]
+edition = "2018"
+
+[dependencies]
+amethyst = "0.15.0"
+serde = { version = "1.0.104", features = ["derive"] }
+rendy = { version = "0.4.1", default-features = false, features = ["base", "mesh-obj", "texture-image", "texture-palette", "serde-1"] }
+failure = "0.1"
+lazy_static = "1.4.0"
+glsl-layout = "0.3.2"
+
+[features]
+default = ["vulkan"]
+empty = ["amethyst/empty"]
+metal = ["amethyst/metal"]
+vulkan = ["amethyst/vulkan"]
