@@ -81,7 +81,7 @@ impl<B: Backend> RenderPlugin<B> for RenderFXAA {
                 colors: vec![OutputColor::Image(ImageOptions {
                     kind:kind,
                     levels: 1,
-                    format: Format::Rgb8Unorm,
+                    format: Format::Rgba8Unorm,
                     clear: None,
                 })],
                 depth: Some(depth_options)
@@ -153,7 +153,7 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
             factory.device(),
             ImageViewInfo {
                 view_kind:resource::ViewKind::D2,
-                format:hal::format::Format::Rgb8Unorm,
+                format:hal::format::Format::Rgba8Unorm,
                 swizzle:hal::format::Swizzle::NO,
                 range:resource::SubresourceRange {
                     aspects:hal::format::Aspects::COLOR,
@@ -380,7 +380,7 @@ impl<B: Backend> RenderGroup<B, World> for DrawFXAA<B> {
 
         unsafe {
             // bind texture descriptor
-            encoder.bind_graphics_descriptor_sets(layout, 1, Some(self.texture_set.raw()), std::iter::empty());
+            //encoder.bind_graphics_descriptor_sets(layout, 1, Some(self.texture_set.raw()), std::iter::empty());
 
             // bind vertex buffer
             encoder.bind_vertex_buffers(0, Some((self.vertex_buffer.raw(), 0)));

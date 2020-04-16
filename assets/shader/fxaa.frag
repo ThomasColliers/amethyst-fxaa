@@ -9,7 +9,7 @@ layout(std140, set = 0, binding = 0) uniform FXAAUniformArgs {
     uniform float screen_height;
 };
 
-layout(set = 1, binding = 0) uniform sampler2D color;
+layout(set = 1, binding = 0) uniform texture2D color;
 
 layout(location = 0) in VertexData {
     vec3 position;
