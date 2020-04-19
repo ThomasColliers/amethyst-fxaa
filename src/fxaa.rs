@@ -150,25 +150,16 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
 
         // get view on offscreen image
         let image = ctx.get_image(self.source).unwrap();
-        let view = ImageView::create(
-            factory.device(),
-            ImageViewInfo {
-                view_kind:resource::ViewKind::D2,
-                format:hal::format::Format::Rgba8Unorm,
-                swizzle:hal::format::Swizzle::NO,
-                range:resource::SubresourceRange {
-                    aspects:hal::format::Aspects::COLOR,
-                    levels:0..1,
-                    layers:0..1,
-                }
-            },
-            image.clone(),
-        ).unwrap();
-
-        // TO FIGURE OUT:
-        // Maybe StorageImage is not the right one
-        // Check the Rendy example to see how the texture view thing and sampling worked
-        // Check out the Vulkan example
+        let view = factory.create_image_view(image.clone(), ImageViewInfo {
+            view_kind:resource::ViewKind::D2,
+            format:hal::format::Format::Rgba8Unorm,
+            swizzle:hal::format::Swizzle::NO,
+            range:resource::SubresourceRange {
+                aspects:hal::format::Aspects::COLOR,
+                levels:0..1,
+                layers:0..1,
+            }
+        }).unwrap();
 
         // setup the offscreen texture descriptor set
         let texture_layout:RendyHandle<DescriptorSetLayout<B>> = RendyHandle::from(
@@ -243,7 +234,7 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
             pipeline_layout: pipeline_layout,
             vertex_buffer: vbuf,
             env:env,
-            texture_set:texture_set
+            texture_set:texture_set,
         }))
     }
 }
