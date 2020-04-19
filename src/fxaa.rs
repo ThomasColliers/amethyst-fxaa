@@ -1,23 +1,21 @@
 // Custom `RenderPlugin` to render fxaa post-processing to be used with `RenderingBundle`
 
 use amethyst::renderer::{
-    bundle::{Target, TargetImage, RenderOrder, RenderPlan, RenderPlugin, ImageOptions, OutputColor, TargetPlanOutputs },
+    bundle::{Target, TargetImage, RenderOrder, RenderPlan, RenderPlugin },
     Backend, Factory,
     submodules::{DynamicUniform},
     pipeline::{PipelineDescBuilder, PipelinesBuilder},
     util,
-    pass::*,
-    Kind,
 };
 use amethyst::{
-    ecs::{World,ReadExpect},
+    ecs::{World},
     error::Error,
     prelude::*,
     window::ScreenDimensions,
 };
 use rendy::{
     command::{QueueId, RenderPassEncoder },
-    hal::{self, device::Device, pso, pso::ShaderStageFlags, format::Format, command::ClearValue, command::ClearDepthStencil, command::ClearColor },
+    hal::{self, device::Device, pso, pso::ShaderStageFlags, format::Format },
     graph::{
         render::{PrepareResult, RenderGroup, RenderGroupDesc},
         GraphContext, NodeBuffer, NodeImage, ImageId
@@ -27,10 +25,9 @@ use rendy::{
     },
     shader::{Shader, SpirvShader},
     memory,
-    resource::{self,Escape,BufferInfo,Buffer,DescriptorSet,Handle as RendyHandle,DescriptorSetLayout,ImageView,ImageViewInfo,SamplerInfo},
+    resource::{self,Escape,BufferInfo,Buffer,DescriptorSet,Handle as RendyHandle,DescriptorSetLayout,ImageViewInfo,SamplerInfo},
 };
 use glsl_layout::*;
-use std::iter;
 
 // plugin
 #[derive(Default, Debug)]
@@ -65,29 +62,6 @@ impl<B: Backend> RenderPlugin<B> for RenderFXAA {
         _world: &World
     ) -> Result<(), Error> {
         self.dirty = false;
-
-        // add the offscreen target
-        let dimensions = self.dimensions.as_ref().unwrap();
-        let kind = Kind::D2(dimensions.width() as u32, dimensions.height() as u32, 1, 1);
-        let depth_options = ImageOptions {
-            kind: kind,
-            levels: 1,
-            format: Format::D32Sfloat,
-            clear: Some(ClearValue::DepthStencil(ClearDepthStencil(1.0, 0))),
-        };
-        plan.add_root(Target::Custom("offscreen"));
-        plan.define_pass(
-            Target::Custom("offscreen"),
-            TargetPlanOutputs {
-                colors: vec![OutputColor::Image(ImageOptions {
-                    kind:kind,
-                    levels: 1,
-                    format: Format::Rgba8Unorm,
-                    clear: Some(ClearValue::Color([0.0, 0.0, 0.0, 1.0].into())),
-                })],
-                depth: Some(depth_options)
-            }
-        )?;
 
         // use the offscreen target as input for this pass
         plan.extend_target(self.target, |ctx| {

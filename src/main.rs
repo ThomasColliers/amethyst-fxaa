@@ -1,4 +1,5 @@
 mod fxaa;
+mod offscreen;
 
 use amethyst::{
     assets::{PrefabLoader, PrefabLoaderSystemDesc, RonFormat, PrefabData, ProgressCounter },
@@ -96,6 +97,7 @@ fn main() -> amethyst::Result<()> {
                 .with_plugin(
                     RenderToWindow::from_config_path(display_config_path)?.with_clear([0.0, 0.0, 0.0, 1.0]),
                 )
+                .with_plugin(offscreen::RenderOffscreen::default())
                 .with_plugin(RenderShaded3D::default().with_target(Target::Custom("offscreen")))
                 .with_plugin(fxaa::RenderFXAA::default())
         )?;
