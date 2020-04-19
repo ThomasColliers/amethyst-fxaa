@@ -27,7 +27,7 @@ use rendy::{
     },
     shader::{Shader, SpirvShader},
     memory,
-    resource::{self,Escape,BufferInfo,Buffer,DescriptorSet,Handle as RendyHandle,DescriptorSetLayout,ImageView,ImageViewInfo},
+    resource::{self,Escape,BufferInfo,Buffer,DescriptorSet,Handle as RendyHandle,DescriptorSetLayout,ImageView,ImageViewInfo,SamplerInfo},
 };
 use glsl_layout::*;
 use std::iter;
@@ -66,7 +66,7 @@ impl<B: Backend> RenderPlugin<B> for RenderFXAA {
     ) -> Result<(), Error> {
         self.dirty = false;
 
-        // try and add our pass first
+        // add the offscreen target
         let dimensions = self.dimensions.as_ref().unwrap();
         let kind = Kind::D2(dimensions.width() as u32, dimensions.height() as u32, 1, 1);
         let depth_options = ImageOptions {
@@ -89,6 +89,7 @@ impl<B: Backend> RenderPlugin<B> for RenderFXAA {
             }
         )?;
 
+        // use the offscreen target as input for this pass
         plan.extend_target(self.target, |ctx| {
             let source_image = TargetImage::Color(Target::Custom("offscreen"), 0);
             let source_id = ctx.get_image(source_image).unwrap();
@@ -161,17 +162,32 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
             }
         }).unwrap();
 
+        // make a sampler
+        let sampler = factory.create_sampler(SamplerInfo {
+            min_filter:hal::image::Filter::Linear,
+            mag_filter:hal::image::Filter::Linear,
+            mip_filter:hal::image::Filter::Linear,
+            wrap_mode:(hal::image::WrapMode::Border,hal::image::WrapMode::Border,hal::image::WrapMode::Border),
+            lod_bias:hal::image::Lod::ZERO,
+            lod_range:hal::image::Lod::ZERO .. hal::image::Lod::MAX,
+            comparison:None,
+            border:[0.0,0.0,0.0,0.0].into(),
+            normalized:true,
+            anisotropic:hal::image::Anisotropic::Off
+        }).unwrap();
+
         // setup the offscreen texture descriptor set
         let texture_layout:RendyHandle<DescriptorSetLayout<B>> = RendyHandle::from(
             factory
-            .create_descriptor_set_layout(vec![hal::pso::DescriptorSetLayoutBinding {
-                binding: 0,
-                //ty: pso::DescriptorType::CombinedImageSampler,
-                ty: pso::DescriptorType::SampledImage,
-                count: 1,
-                stage_flags: pso::ShaderStageFlags::FRAGMENT,
-                immutable_samplers: false,
-            }])
+            .create_descriptor_set_layout(vec![
+                    hal::pso::DescriptorSetLayoutBinding {
+                        binding: 0,
+                        ty: pso::DescriptorType::CombinedImageSampler,
+                        count: 1,
+                        stage_flags: pso::ShaderStageFlags::FRAGMENT,
+                        immutable_samplers: false,
+                    }
+                ])
             .unwrap()
         );
         let texture_set = factory.create_descriptor_set(texture_layout.clone()).unwrap();
@@ -183,9 +199,10 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
                     set: texture_set.raw(),
                     binding: 0,
                     array_offset: 0,
-                    descriptors: Some(pso::Descriptor::Image(
+                    descriptors: Some(pso::Descriptor::CombinedImageSampler(
                         view.raw(),
-                        hal::image::Layout::ShaderReadOnlyOptimal
+                        hal::image::Layout::ShaderReadOnlyOptimal,
+                        sampler.raw()
                     ))
                 }
             ]);
@@ -355,7 +372,7 @@ impl<B: Backend> RenderGroup<B, World> for DrawFXAA<B> {
             screen_width: dimensions.width(),
             screen_height: dimensions.height(),
         }.std140());
-        
+
         //PrepareResult::DrawReuse
         PrepareResult::DrawRecord
     }
