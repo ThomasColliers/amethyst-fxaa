@@ -67,8 +67,10 @@ impl<B: Backend> RenderPlugin<B> for RenderFXAA {
         plan.extend_target(self.target, |ctx| {
             let source_image = TargetImage::Color(Target::Custom("offscreen"), 0);
             let source_id = ctx.get_image(source_image).unwrap();
+            let node_id = ctx.get_node(Target::Custom("offscreen")).unwrap();
+            ctx.add_dep(node_id);
             ctx.add(
-                RenderOrder::Opaque,
+                RenderOrder::DisplayPostEffects,
                 DrawFXAADesc::new(source_id).builder(),
             )?;
             Ok(())
