@@ -17,7 +17,7 @@ use amethyst::{
 };
 use rendy::{
     command::{QueueId, RenderPassEncoder },
-    hal::{self, device::Device, pso, pso::ShaderStageFlags, format::Format, command::ClearValue, command::ClearDepthStencil },
+    hal::{self, device::Device, pso, pso::ShaderStageFlags, format::Format, command::ClearValue, command::ClearDepthStencil, command::ClearColor },
     graph::{
         render::{PrepareResult, RenderGroup, RenderGroupDesc},
         GraphContext, NodeBuffer, NodeImage, ImageId
@@ -30,6 +30,7 @@ use rendy::{
     resource::{self,Escape,BufferInfo,Buffer,DescriptorSet,Handle as RendyHandle,DescriptorSetLayout,ImageView,ImageViewInfo},
 };
 use glsl_layout::*;
+use std::iter;
 
 // plugin
 #[derive(Default, Debug)]
@@ -82,7 +83,7 @@ impl<B: Backend> RenderPlugin<B> for RenderFXAA {
                     kind:kind,
                     levels: 1,
                     format: Format::Rgba8Unorm,
-                    clear: None,
+                    clear: Some(ClearValue::Color([0.0, 0.0, 0.0, 1.0].into())),
                 })],
                 depth: Some(depth_options)
             }
@@ -164,12 +165,18 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
             image.clone(),
         ).unwrap();
 
+        // TO FIGURE OUT:
+        // Maybe StorageImage is not the right one
+        // Check the Rendy example to see how the texture view thing and sampling worked
+        // Check out the Vulkan example
+
         // setup the offscreen texture descriptor set
         let texture_layout:RendyHandle<DescriptorSetLayout<B>> = RendyHandle::from(
             factory
             .create_descriptor_set_layout(vec![hal::pso::DescriptorSetLayoutBinding {
                 binding: 0,
-                ty: pso::DescriptorType::CombinedImageSampler,
+                //ty: pso::DescriptorType::CombinedImageSampler,
+                ty: pso::DescriptorType::SampledImage,
                 count: 1,
                 stage_flags: pso::ShaderStageFlags::FRAGMENT,
                 immutable_samplers: false,
@@ -185,10 +192,10 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
                     set: texture_set.raw(),
                     binding: 0,
                     array_offset: 0,
-                    descriptors: vec![pso::Descriptor::Image(
+                    descriptors: Some(pso::Descriptor::Image(
                         view.raw(),
                         hal::image::Layout::ShaderReadOnlyOptimal
-                    )]
+                    ))
                 }
             ]);
         }
@@ -380,7 +387,7 @@ impl<B: Backend> RenderGroup<B, World> for DrawFXAA<B> {
 
         unsafe {
             // bind texture descriptor
-            //encoder.bind_graphics_descriptor_sets(layout, 1, Some(self.texture_set.raw()), std::iter::empty());
+            encoder.bind_graphics_descriptor_sets(layout, 1, Some(self.texture_set.raw()), std::iter::empty());
 
             // bind vertex buffer
             encoder.bind_vertex_buffers(0, Some((self.vertex_buffer.raw(), 0)));
