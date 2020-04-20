@@ -15,17 +15,18 @@ use amethyst::{
 };
 use rendy::{
     command::{QueueId, RenderPassEncoder },
-    hal::{self, device::Device, pso, pso::ShaderStageFlags, format::Format },
+    hal::{self, device::Device, pso, pso::ShaderStageFlags, format::Format, image::Filter::Linear, image::WrapMode },
     graph::{
         render::{PrepareResult, RenderGroup, RenderGroupDesc},
         GraphContext, NodeBuffer, NodeImage, ImageId
     },
+    
     mesh::{
         VertexFormat, AsVertex
     },
     shader::{Shader, SpirvShader},
     memory,
-    resource::{self,Escape,BufferInfo,Buffer,DescriptorSet,Handle as RendyHandle,DescriptorSetLayout,ImageViewInfo,SamplerInfo},
+    resource::{self,Escape,BufferInfo,Buffer,DescriptorSet,Handle as RendyHandle,DescriptorSetLayout,ImageViewInfo,SamplerInfo,ImageView,Sampler},
 };
 use glsl_layout::*;
 
@@ -138,12 +139,12 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
             }
         }).unwrap();
 
-        // make a sampler
+        // make a sampler for the offscreen image
         let sampler = factory.create_sampler(SamplerInfo {
-            min_filter:hal::image::Filter::Linear,
-            mag_filter:hal::image::Filter::Linear,
-            mip_filter:hal::image::Filter::Linear,
-            wrap_mode:(hal::image::WrapMode::Border,hal::image::WrapMode::Border,hal::image::WrapMode::Border),
+            min_filter:Linear,
+            mag_filter:Linear,
+            mip_filter:Linear,
+            wrap_mode:(WrapMode::Clamp,WrapMode::Clamp,WrapMode::Clamp),
             lod_bias:hal::image::Lod::ZERO,
             lod_range:hal::image::Lod::ZERO .. hal::image::Lod::MAX,
             comparison:None,
@@ -168,6 +169,18 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
         );
         let texture_set = factory.create_descriptor_set(texture_layout.clone()).unwrap();
 
+        // setup the pipeline
+        let (pipeline, pipeline_layout) = build_custom_pipeline(
+            factory,
+            subpass,
+            framebuffer_width,
+            framebuffer_height,
+            vec![
+                env.raw_layout(),
+                texture_layout.raw(),
+            ],
+        )?;
+
         // write to the texture description set
         unsafe {
             factory.device().write_descriptor_sets(vec![
@@ -183,18 +196,6 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
                 }
             ]);
         }
-
-        // setup the pipeline
-        let (pipeline, pipeline_layout) = build_custom_pipeline(
-            factory,
-            subpass,
-            framebuffer_width,
-            framebuffer_height,
-            vec![
-                env.raw_layout(),
-                texture_layout.raw(),
-            ],
-        )?;
 
         // create a static vertex buffer
         let vbuf_size = FXAAVertexArgs::vertex().stride as u64 * 6;
@@ -228,6 +229,8 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
             vertex_buffer: vbuf,
             env:env,
             texture_set:texture_set,
+            view:view,
+            sampler:sampler,
         }))
     }
 }
@@ -331,6 +334,8 @@ pub struct DrawFXAA<B: Backend> {
     vertex_buffer: Escape<Buffer<B>>,
     env: DynamicUniform<B, FXAAUniformArgs>,
     texture_set: Escape<DescriptorSet<B>>,
+    view: Escape<ImageView<B>>,
+    sampler: Escape<Sampler<B>>,
 }
 
 impl<B: Backend> RenderGroup<B, World> for DrawFXAA<B> {
