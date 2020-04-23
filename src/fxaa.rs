@@ -1,15 +1,13 @@
 // Custom `RenderPlugin` to render fxaa post-processing to be used with `RenderingBundle`
 
 use amethyst::renderer::{
-    bundle::{Target, TargetImage, RenderOrder, RenderPlan, RenderPlugin },
-    Backend, Factory,
+    Backend,
     submodules::{DynamicUniform},
     pipeline::{PipelineDescBuilder, PipelinesBuilder},
     util,
 };
 use amethyst::{
     ecs::{World},
-    error::Error,
     prelude::*,
     window::ScreenDimensions,
 };
@@ -18,68 +16,18 @@ use rendy::{
     hal::{self, device::Device, pso, pso::ShaderStageFlags, format::Format, image::Filter::Linear, image::WrapMode },
     graph::{
         render::{PrepareResult, RenderGroup, RenderGroupDesc},
-        GraphContext, NodeBuffer, NodeImage, ImageId
+        GraphContext, NodeBuffer, NodeImage, ImageAccess,
     },
-    
     mesh::{
         VertexFormat, AsVertex
     },
     shader::{Shader, SpirvShader},
     memory,
-    resource::{self,Escape,BufferInfo,Buffer,DescriptorSet,Handle as RendyHandle,DescriptorSetLayout,ImageViewInfo,SamplerInfo,ImageView,Sampler},
+    resource::{self,Escape,BufferInfo,Buffer,DescriptorSet,Handle as RendyHandle,DescriptorSetLayout,ImageViewInfo,SamplerInfo,ImageView,Sampler,Image},
+    factory::{Factory},
 };
+
 use glsl_layout::*;
-
-// plugin
-#[derive(Default, Debug)]
-pub struct RenderFXAA {
-    target: Target,
-    dirty: bool,
-    dimensions: Option<ScreenDimensions>,
-}
-
-impl RenderFXAA {
-    pub fn with_target(mut self, target: Target) -> Self {
-        self.target = target;
-        self
-    }
-}
-
-impl<B: Backend> RenderPlugin<B> for RenderFXAA {
-    fn should_rebuild(&mut self, world: &World) -> bool {
-        let new_dimensions = world.try_fetch::<ScreenDimensions>();
-        if self.dimensions.as_ref() != new_dimensions.as_deref() {
-            self.dirty = true;
-            self.dimensions = new_dimensions.map(|d| (*d).clone());
-            return false;
-        }
-        self.dirty
-    }
-
-    fn on_plan(
-        &mut self,
-        plan: &mut RenderPlan<B>,
-        _factory: &mut Factory<B>,
-        _world: &World
-    ) -> Result<(), Error> {
-        self.dirty = false;
-
-        // use the offscreen target as input for this pass
-        plan.extend_target(self.target, |ctx| {
-            let source_image = TargetImage::Color(Target::Custom("offscreen"), 0);
-            let source_id = ctx.get_image(source_image).unwrap();
-            let node_id = ctx.get_node(Target::Custom("offscreen")).unwrap();
-            ctx.add_dep(node_id);
-            ctx.add(
-                RenderOrder::DisplayPostEffects,
-                DrawFXAADesc::new(source_id).builder(),
-            )?;
-            Ok(())
-        });
-
-        Ok(())
-    }
-}
 
 // load our shader pair
 lazy_static::lazy_static! {
@@ -97,20 +45,25 @@ lazy_static::lazy_static! {
 }
 
 // plugin desc
-#[derive(Clone, PartialEq, Debug)]
-pub struct DrawFXAADesc {
-    source: ImageId,
-}
-
-impl DrawFXAADesc {
-    pub fn new(source: ImageId) -> Self {
-        Self {
-            source: source
-        }
-    }
-}
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct DrawFXAADesc;
 
 impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
+    fn depth(&self) -> bool {
+        false
+    }
+
+    fn images(&self) -> Vec<ImageAccess> {
+        vec![
+            ImageAccess {
+                access:hal::image::Access::SHADER_READ,
+                usage:hal::image::Usage::SAMPLED,
+                layout:hal::image::Layout::ShaderReadOnlyOptimal,
+                stages:hal::pso::PipelineStage::FRAGMENT_SHADER,
+            }
+        ]
+    }
+
     fn build(
         self,
         ctx: &GraphContext<B>,
@@ -127,7 +80,8 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
         let env = DynamicUniform::new(factory, pso::ShaderStageFlags::FRAGMENT)?;
 
         // get view on offscreen image
-        let image = ctx.get_image(self.source).unwrap();
+        let image = ctx.get_image(_images[0].id).unwrap();
+        //let image = ctx.get_image(self.source).unwrap();
         let view = factory.create_image_view(image.clone(), ImageViewInfo {
             view_kind:resource::ViewKind::D2,
             format:hal::format::Format::Rgba8Unorm,
@@ -231,6 +185,7 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
             texture_set:texture_set,
             view:view,
             sampler:sampler,
+            image:image.clone(),
         }))
     }
 }
@@ -266,7 +221,6 @@ fn build_custom_pipeline<B: Backend>(
                 .with_subpass(subpass)
                 .with_framebuffer_size(framebuffer_width, framebuffer_height)
                 .with_face_culling(pso::Face::BACK)
-                // alpha blended
                 .with_blend_targets(vec![pso::ColorBlendDesc {
                     mask: pso::ColorMask::ALL,
                     blend: None,
@@ -336,6 +290,7 @@ pub struct DrawFXAA<B: Backend> {
     texture_set: Escape<DescriptorSet<B>>,
     view: Escape<ImageView<B>>,
     sampler: Escape<Sampler<B>>,
+    image: RendyHandle<Image<B>>,
 }
 
 impl<B: Backend> RenderGroup<B, World> for DrawFXAA<B> {

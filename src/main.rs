@@ -1,8 +1,12 @@
 mod fxaa;
 mod offscreen;
+mod graph;
 
 use amethyst::{
-    assets::{PrefabLoader, PrefabLoaderSystemDesc, RonFormat, PrefabData, ProgressCounter },
+    assets::{
+        PrefabLoader, PrefabLoaderSystemDesc, RonFormat, PrefabData, ProgressCounter,
+        Processor,
+    },
     core::{
         Transform,TransformBundle,
     },
@@ -15,12 +19,12 @@ use amethyst::{
     renderer::{
         camera::{CameraPrefab},
         formats::GraphicsPrefab,
+        mtl::Material,
         light::LightPrefab,
-        plugins::{RenderShaded3D, RenderToWindow },
         rendy::mesh::{Normal, Position, Tangent, TexCoord},
         types::DefaultBackend,
-        RenderingBundle,
-        bundle::Target,
+        MeshProcessorSystem, TextureProcessorSystem, visibility::VisibilitySortingSystem,
+        RenderingSystem
     },
     utils::{
         application_root_dir, 
@@ -31,7 +35,8 @@ use amethyst::{
     },
     controls::{ArcBallControlBundle, ControlTagPrefab},
     winit::VirtualKeyCode,
-    Error
+    Error,
+    window::{WindowBundle},
 };
 use serde::{Deserialize, Serialize};
 
@@ -92,15 +97,26 @@ fn main() -> amethyst::Result<()> {
             InputBundle::<StringBindings>::new(),
         )?
         .with_bundle(ArcBallControlBundle::<StringBindings>::new())?
-        .with_bundle(
-            RenderingBundle::<DefaultBackend>::new()
-                .with_plugin(offscreen::RenderOffscreen::default())
-                .with_plugin(
-                    RenderToWindow::from_config_path(display_config_path)?.with_clear([0.0, 0.0, 0.0, 1.0]),
-                )
-                .with_plugin(RenderShaded3D::default().with_target(Target::Custom("offscreen")))
-                .with_plugin(fxaa::RenderFXAA::default())
-        )?;
+        .with(
+            VisibilitySortingSystem::new(),
+            "visibility_sorting_system",
+            &[],
+        )
+        .with(
+            MeshProcessorSystem::<DefaultBackend>::default(),
+            "mesh_processor",
+            &[],
+        )
+        .with(
+            TextureProcessorSystem::<DefaultBackend>::default(),
+            "texture_processor",
+            &[],
+        )
+        .with(Processor::<Material>::new(), "material_processor", &[])
+        .with_bundle(WindowBundle::from_config_path(display_config_path)?)?
+        .with_thread_local(RenderingSystem::<DefaultBackend, _>::new(
+            graph::RenderGraph::default(),
+        ));
 
     let mut game = Application::new(assets_dir, MainState::default(), game_data)?;
     game.run();
