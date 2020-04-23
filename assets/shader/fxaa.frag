@@ -12,6 +12,7 @@
 layout(std140, set = 0, binding = 0) uniform FXAAUniformArgs {
     uniform float screen_width;
     uniform float screen_height;
+    uniform bool enabled;
 };
 
 layout(set = 1, binding = 0) uniform sampler2D color;
@@ -27,7 +28,11 @@ layout(location = 0) out vec4 out_color;
 
 void main(){
     vec4 zero = vec4(0.0, 0.0, 0.0, 0.0);
-    out_color = FxaaPixelShader(vertex.tex_coord, zero, color, color, color, vec2(1.0/screen_width,1.0/screen_height), zero, zero, zero, 0.75, 0.125, 0.0833, 8.0, 0.125, 0.05, zero);
+    if(enabled){
+        out_color = FxaaPixelShader(vertex.tex_coord, zero, color, color, color, vec2(1.0/screen_width,1.0/screen_height), zero, zero, zero, 0.75, 0.125, 0.0833, 8.0, 0.125, 0.05, zero);
+    }else{
+        out_color = texture(color, vertex.tex_coord);
+    }
 
     //vec4 input_color = texture(color, vertex.tex_coord);
     // simply output the texture coordinate for now

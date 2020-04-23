@@ -11,6 +11,7 @@ rendy = { path = "/home/ego/Projects/rendy/rendy", version = "0.4.1", default-fe
 failure = "0.1"
 lazy_static = "1.4.0"
 glsl-layout = "0.3.2"
+derivative = "1.0.3"
 
 [features]
 default = ["vulkan"]

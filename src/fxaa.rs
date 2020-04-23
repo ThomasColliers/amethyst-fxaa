@@ -26,7 +26,6 @@ use rendy::{
     resource::{self,Escape,BufferInfo,Buffer,DescriptorSet,Handle as RendyHandle,DescriptorSetLayout,ImageViewInfo,SamplerInfo,ImageView,Sampler,Image},
     factory::{Factory},
 };
-
 use glsl_layout::*;
 
 // load our shader pair
@@ -42,6 +41,32 @@ lazy_static::lazy_static! {
         ShaderStageFlags::FRAGMENT,
         "main",
     ).unwrap();
+}
+
+// uniform arguments
+/// layout(std140, set = 0, binding = 0) uniform FXAAUniformArgs {
+///    uniform float screen_width;
+///    uniform float screen_height;
+///    uniform bool enabled;
+/// };
+#[derive(Clone, Copy, Debug, AsStd140)]
+#[repr(C, align(4))]
+pub struct FXAAUniformArgs {
+    pub screen_width: float,
+    pub screen_height: float,
+    pub enabled: boolean,
+}
+
+/// Vertex Arguments to pass into shader.
+/// layout(location = 0) out VertexData {
+///    vec2 position;
+///    vec2 tex_coord;
+/// } vertex;
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, AsStd140)]
+#[repr(C, align(4))]
+pub struct FXAAVertexArgs {
+    pub position: vec2,
+    pub tex_coord: vec2,
 }
 
 // plugin desc
@@ -246,28 +271,6 @@ fn build_custom_pipeline<B: Backend>(
     }
 }
 
-// uniform arguments
-/// layout(std140, set = 0, binding = 0) uniform FXAAUniformArgs {
-///    uniform int scale;
-/// };
-#[derive(Clone, Copy, Debug, AsStd140)]
-#[repr(C, align(4))]
-pub struct FXAAUniformArgs {
-    pub screen_width: float,
-    pub screen_height: float,
-}
-
-/// Vertex Arguments to pass into shader.
-/// layout(location = 0) out VertexData {
-///    vec2 position;
-///    vec2 tex_coord;
-/// } vertex;
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, AsStd140)]
-#[repr(C, align(4))]
-pub struct FXAAVertexArgs {
-    pub position: vec2,
-    pub tex_coord: vec2,
-}
 
 /// Required to send data into the shader.
 /// These names must match the shader.
@@ -304,9 +307,11 @@ impl<B: Backend> RenderGroup<B, World> for DrawFXAA<B> {
     ) -> PrepareResult {
         // write screen dimensions to the uniform
         let dimensions = world.read_resource::<ScreenDimensions>();
+        let fxaa_settings = world.read_resource::<crate::FxaaSettings>();
         self.env.write(factory, index, FXAAUniformArgs {
             screen_width: dimensions.width(),
             screen_height: dimensions.height(),
+            enabled: fxaa_settings.enabled.into(),
         }.std140());
 
         //PrepareResult::DrawReuse

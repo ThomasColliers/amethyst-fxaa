@@ -1,6 +1,6 @@
 # amethyst-fxaa - work in progress
 
-Sample FXAA implementation in Amethyst
+Sample FXAA implementation in Amethyst. Press 'f' while it's running to toggle on or off.
 
 ## How to run
 
