@@ -7,10 +7,11 @@ use amethyst::{
         types::DefaultBackend,
         Factory, Format, GraphBuilder, GraphCreator, Kind,
         RenderGroupDesc, SubpassBuilder,
+        rendy::graph::render::{SimpleGraphicsPipeline,RenderGroupBuilder},
     },
     window::{ScreenDimensions, Window },
 };
-use crate::fxaa::DrawFXAADesc;
+//use crate::fxaa::DrawFXAADesc;
 
 #[derive(Default)]
 pub struct RenderGraph {
@@ -90,20 +91,19 @@ impl GraphCreator<DefaultBackend> for RenderGraph {
                 .into_pass(),
         );
 
-        // Post processing pass
-        let post_pass = graph_builder.add_node(
-            SubpassBuilder::new()
-                //.with_image(hdr)
+        // FXAA pass
+        let fxaa_pass = graph_builder.add_node(
+            crate::fxaa::Pipeline::builder()
+                .with_image(hdr)
+                .into_subpass()
                 .with_dependency(main_pass)
-                .with_group(DrawFXAADesc::default().builder().with_image(hdr))
-                //.with_input(hdr)
                 .with_color(color)
-                .into_pass(),
+                .into_pass()
         );
 
         // Finally, add the pass to the graph
         let _present = graph_builder
-            .add_node(PresentNode::builder(factory, surface, color).with_dependency(post_pass));
+            .add_node(PresentNode::builder(factory, surface, color).with_dependency(fxaa_pass));
 
         graph_builder
     }

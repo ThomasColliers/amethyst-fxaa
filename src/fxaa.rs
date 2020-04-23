@@ -1,11 +1,6 @@
-// Custom `RenderPlugin` to render fxaa post-processing to be used with `RenderingBundle`
+// fxaa render pipeline
+// based on tonepass pipeline from pbr-rendy: https://github.com/termhn/rendy-pbr/blob/master/src/node/pbr/tonemap.rs
 
-use amethyst::renderer::{
-    Backend,
-    submodules::{DynamicUniform},
-    pipeline::{PipelineDescBuilder, PipelinesBuilder},
-    util,
-};
 use amethyst::{
     ecs::{World},
     prelude::*,
@@ -13,20 +8,34 @@ use amethyst::{
 };
 use rendy::{
     command::{QueueId, RenderPassEncoder },
-    hal::{self, device::Device, pso, pso::ShaderStageFlags, format::Format, image::Filter::Linear, image::WrapMode },
+    hal::{
+        self, 
+        device::Device, pso::ShaderStageFlags, pso::DescriptorPool,
+        format::Format, image::Filter::Linear, image::WrapMode 
+    },
     graph::{
-        render::{PrepareResult, RenderGroup, RenderGroupDesc},
+        render::{
+            PrepareResult,
+            SimpleGraphicsPipelineDesc,
+            SimpleGraphicsPipeline,
+            Layout, SetLayout
+        },
         GraphContext, NodeBuffer, NodeImage, ImageAccess,
     },
     mesh::{
         VertexFormat, AsVertex
     },
-    shader::{Shader, SpirvShader},
+    shader::{SpirvShader},
     memory,
-    resource::{self,Escape,BufferInfo,Buffer,DescriptorSet,Handle as RendyHandle,DescriptorSetLayout,ImageViewInfo,SamplerInfo,ImageView,Sampler,Image},
+    resource::{ 
+        self,Escape,BufferInfo,Buffer,
+        Handle as RendyHandle,DescriptorSetLayout,
+        ImageViewInfo,SamplerInfo,ImageView,Sampler,
+    },
     factory::{Factory},
 };
 use glsl_layout::*;
+use std::mem::size_of;
 
 // load our shader pair
 lazy_static::lazy_static! {
@@ -41,6 +50,10 @@ lazy_static::lazy_static! {
         ShaderStageFlags::FRAGMENT,
         "main",
     ).unwrap();
+
+    static ref SHADERS: rendy::shader::ShaderSetBuilder = rendy::shader::ShaderSetBuilder::default()
+        .with_vertex(&*VERTEX).unwrap()
+        .with_fragment(&*FRAGMENT).unwrap();
 }
 
 // uniform arguments
@@ -69,116 +82,225 @@ pub struct FXAAVertexArgs {
     pub tex_coord: vec2,
 }
 
-// plugin desc
-#[derive(Clone, PartialEq, Debug, Default)]
-pub struct DrawFXAADesc;
+/// Required to send data into the shader.
+/// These names must match the shader.
+impl AsVertex for FXAAVertexArgs {
+    fn vertex() -> VertexFormat {
+        VertexFormat::new((
+            (Format::Rg32Sfloat, "position"),
+            (Format::Rg32Sfloat, "tex_coord"),
+        ))
+    }
+}
 
-impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
-    fn depth(&self) -> bool {
-        false
+
+// the pipeline itself
+#[derive(Debug, Default)]
+pub struct PipelineDesc;
+
+#[derive(Debug)]
+pub struct Pipeline<B: hal::Backend> {
+    buffer: Escape<Buffer<B>>,
+    sets: Vec<B::DescriptorSet>,
+    descriptor_pool: B::DescriptorPool,
+    image_sampler: Escape<Sampler<B>>,
+    image_view: Escape<ImageView<B>>,
+    vertex_buffer: Escape<Buffer<B>>,
+    settings: Settings,
+}
+
+// utility to calculte the uniform size and offset including alignment
+#[derive(Debug, PartialEq, Eq)]
+struct Settings {
+    align: u64
+}
+
+impl Settings {
+    const UNIFORM_SIZE:u64 = size_of::<FXAAUniformArgs>() as u64;
+
+    #[inline]
+    fn buffer_frame_size(&self) -> u64 {
+        ((Self::UNIFORM_SIZE - 1) / self.align + 1) * self.align
     }
 
+    #[inline]
+    fn uniform_offset(&self, index: u64) -> u64 {
+        self.buffer_frame_size() * index as u64
+    }
+}
+
+impl<B> SimpleGraphicsPipelineDesc<B, World> for PipelineDesc
+where B: hal::Backend {
+    type Pipeline = Pipeline<B>;
+
     fn images(&self) -> Vec<ImageAccess> {
+        vec![ImageAccess {
+            access: hal::image::Access::SHADER_READ,
+            usage: hal::image::Usage::SAMPLED,
+            layout: hal::image::Layout::ShaderReadOnlyOptimal,
+            stages: hal::pso::PipelineStage::FRAGMENT_SHADER,
+        }]
+    }
+
+    fn depth_stencil(&self) -> Option<hal::pso::DepthStencilDesc> {
+        None
+    }
+
+    fn vertices(
+        &self,
+    ) -> Vec<(
+        Vec<hal::pso::Element<hal::format::Format>>,
+        hal::pso::ElemStride,
+        hal::pso::VertexInputRate,
+    )> {
         vec![
-            ImageAccess {
-                access:hal::image::Access::SHADER_READ,
-                usage:hal::image::Usage::SAMPLED,
-                layout:hal::image::Layout::ShaderReadOnlyOptimal,
-                stages:hal::pso::PipelineStage::FRAGMENT_SHADER,
-            }
+            FXAAVertexArgs::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
         ]
     }
 
-    fn build(
+    fn load_shader_set(
+        &self,
+        factory: &mut Factory<B>,
+        _world: &World,
+    ) -> rendy::shader::ShaderSet<B> {
+        SHADERS.build(factory, Default::default()).unwrap()
+    }
+
+    fn layout(&self) -> Layout {
+        Layout {
+            sets: vec![SetLayout {
+                bindings: vec![
+                    hal::pso::DescriptorSetLayoutBinding {
+                        binding: 0,
+                        ty: hal::pso::DescriptorType::UniformBuffer,
+                        count: 1,
+                        stage_flags: hal::pso::ShaderStageFlags::FRAGMENT,
+                        immutable_samplers: false,
+                    },
+                    hal::pso::DescriptorSetLayoutBinding {
+                        binding: 1,
+                        ty: hal::pso::DescriptorType::CombinedImageSampler,
+                        count: 1,
+                        stage_flags: hal::pso::ShaderStageFlags::FRAGMENT,
+                        immutable_samplers: false,
+                    },
+                ],
+            }],
+            push_constants: Vec::new(),
+        }
+    }
+
+    fn build<'a>(
         self,
         ctx: &GraphContext<B>,
         factory: &mut Factory<B>,
         _queue: QueueId,
-        _aux: &World,
-        framebuffer_width: u32,
-        framebuffer_height: u32,
-        subpass: hal::pass::Subpass<'_, B>,
-        _buffers: Vec<NodeBuffer>,
-        _images: Vec<NodeImage>,
-    ) -> Result<Box<dyn RenderGroup<B, World>>, failure::Error> {
-        // this will keep our screen dimensions uniforms
-        let env = DynamicUniform::new(factory, pso::ShaderStageFlags::FRAGMENT)?;
+        _world: &World,
+        buffers: Vec<NodeBuffer>,
+        images: Vec<NodeImage>,
+        set_layouts: &[RendyHandle<DescriptorSetLayout<B>>],
+    ) -> Result<Pipeline<B>, failure::Error> {
+        assert!(buffers.is_empty());
+        assert!(images.len() == 1);
+        assert!(set_layouts.len() == 1);
 
-        // get view on offscreen image
-        let image = ctx.get_image(_images[0].id).unwrap();
-        //let image = ctx.get_image(self.source).unwrap();
-        let view = factory.create_image_view(image.clone(), ImageViewInfo {
-            view_kind:resource::ViewKind::D2,
-            format:hal::format::Format::Rgba8Unorm,
-            swizzle:hal::format::Swizzle::NO,
-            range:resource::SubresourceRange {
-                aspects:hal::format::Aspects::COLOR,
-                levels:0..1,
-                layers:0..1,
-            }
-        }).unwrap();
+        let align_limit = hal::adapter::PhysicalDevice::limits(factory.physical()).min_uniform_buffer_offset_alignment;
+        let settings = Settings { align:align_limit };
+        let frames = 3;
 
-        // make a sampler for the offscreen image
-        let sampler = factory.create_sampler(SamplerInfo {
-            min_filter:Linear,
-            mag_filter:Linear,
-            mip_filter:Linear,
-            wrap_mode:(WrapMode::Clamp,WrapMode::Clamp,WrapMode::Clamp),
-            lod_bias:hal::image::Lod::ZERO,
-            lod_range:hal::image::Lod::ZERO .. hal::image::Lod::MAX,
-            comparison:None,
-            border:[0.0,0.0,0.0,0.0].into(),
-            normalized:true,
-            anisotropic:hal::image::Anisotropic::Off
-        }).unwrap();
+        let mut descriptor_pool = unsafe {
+            factory.create_descriptor_pool(
+                frames,
+                vec![
+                    hal::pso::DescriptorRangeDesc {
+                        ty: hal::pso::DescriptorType::UniformBuffer,
+                        count: frames,
+                    },
+                    hal::pso::DescriptorRangeDesc {
+                        ty: hal::pso::DescriptorType::CombinedImageSampler,
+                        count: frames,
+                    },
+                ],
+                hal::pso::DescriptorPoolCreateFlags::empty(),
+            )?
+        };
 
-        // setup the offscreen texture descriptor set
-        let texture_layout:RendyHandle<DescriptorSetLayout<B>> = RendyHandle::from(
-            factory
-            .create_descriptor_set_layout(vec![
-                    hal::pso::DescriptorSetLayoutBinding {
+        let image_sampler = factory
+            .create_sampler(SamplerInfo {
+                min_filter:Linear,
+                mag_filter:Linear,
+                mip_filter:Linear,
+                wrap_mode:(WrapMode::Clamp,WrapMode::Clamp,WrapMode::Clamp),
+                lod_bias:hal::image::Lod::ZERO,
+                lod_range:hal::image::Lod::ZERO .. hal::image::Lod::MAX,
+                comparison:None,
+                border:[0.0,0.0,0.0,0.0].into(),
+                normalized:true,
+                anisotropic:hal::image::Anisotropic::Off
+            })
+            .unwrap();
+
+        let image_handle = ctx
+            .get_image(images[0].id)
+            .expect("Input image missing");
+
+        let image_view = factory
+            .create_image_view(
+                image_handle.clone(),
+                ImageViewInfo {
+                    view_kind: resource::ViewKind::D2,
+                    format: hal::format::Format::Rgba8Unorm, //Rgba32Sfloat,
+                    swizzle: hal::format::Swizzle::NO,
+                    range: images[0].range.clone(),
+                },
+            )
+            .expect("Could not create input image view");
+
+        let buffer = factory
+            .create_buffer(
+                BufferInfo {
+                    size: settings.buffer_frame_size() * frames as u64,
+                    usage: hal::buffer::Usage::UNIFORM,
+                },
+                rendy::memory::MemoryUsageValue::Dynamic,
+            )
+            .unwrap();
+
+        let mut sets = Vec::with_capacity(frames);
+        for index in 0..frames {
+            unsafe {
+                let set = descriptor_pool.allocate_set(&set_layouts[0].raw()).unwrap();
+                factory.write_descriptor_sets(vec![
+                    hal::pso::DescriptorSetWrite {
+                        set: &set,
                         binding: 0,
-                        ty: pso::DescriptorType::CombinedImageSampler,
-                        count: 1,
-                        stage_flags: pso::ShaderStageFlags::FRAGMENT,
-                        immutable_samplers: false,
+                        array_offset: 0,
+                        descriptors: Some(hal::pso::Descriptor::Buffer(
+                            buffer.raw(),
+                            Some(settings.uniform_offset(index as u64))
+                            ..Some(
+                                settings.uniform_offset(index as u64) + Settings::UNIFORM_SIZE,
+                            ),
+                        )),
+                    },
+                    hal::pso::DescriptorSetWrite {
+                        set: &set,
+                        binding: 1,
+                        array_offset: 0,
+                        descriptors: Some(hal::pso::Descriptor::CombinedImageSampler(
+                            image_view.raw(),
+                            hal::image::Layout::ShaderReadOnlyOptimal,
+                            image_sampler.raw()
+                        )),
                     }
-                ])
-            .unwrap()
-        );
-        let texture_set = factory.create_descriptor_set(texture_layout.clone()).unwrap();
-
-        // setup the pipeline
-        let (pipeline, pipeline_layout) = build_custom_pipeline(
-            factory,
-            subpass,
-            framebuffer_width,
-            framebuffer_height,
-            vec![
-                env.raw_layout(),
-                texture_layout.raw(),
-            ],
-        )?;
-
-        // write to the texture description set
-        unsafe {
-            factory.device().write_descriptor_sets(vec![
-                hal::pso::DescriptorSetWrite {
-                    set: texture_set.raw(),
-                    binding: 0,
-                    array_offset: 0,
-                    descriptors: Some(pso::Descriptor::CombinedImageSampler(
-                        view.raw(),
-                        hal::image::Layout::ShaderReadOnlyOptimal,
-                        sampler.raw()
-                    ))
-                }
-            ]);
+                ]);
+                sets.push(set);
+            }
         }
 
         // create a static vertex buffer
         let vbuf_size = FXAAVertexArgs::vertex().stride as u64 * 6;
-        let mut vbuf = factory.create_buffer(
+        let mut vertex_buffer = factory.create_buffer(
             BufferInfo {
                 size: vbuf_size,
                 usage: hal::buffer::Usage::VERTEX
@@ -188,7 +310,7 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
         unsafe {
             factory
                 .upload_visible_buffer(
-                    &mut vbuf,
+                    &mut vertex_buffer,
                     0,
                     &[
                         FXAAVertexArgs { position:[-1f32,1f32].into(), tex_coord:[0f32,1f32].into() },
@@ -202,154 +324,78 @@ impl<B: Backend> RenderGroupDesc<B, World> for DrawFXAADesc {
                 .unwrap();
         }
 
-        Ok(Box::new(DrawFXAA::<B> {
-            pipeline: pipeline,
-            pipeline_layout: pipeline_layout,
-            vertex_buffer: vbuf,
-            env:env,
-            texture_set:texture_set,
-            view:view,
-            sampler:sampler,
-            image:image.clone(),
-        }))
+        Ok(Pipeline {
+            buffer,
+            sets,
+            image_view,
+            image_sampler,
+            descriptor_pool,
+            settings,
+            vertex_buffer,
+        })
     }
 }
 
-// build the pipeline
-fn build_custom_pipeline<B: Backend>(
-    factory: &Factory<B>,
-    subpass: hal::pass::Subpass<'_, B>,
-    framebuffer_width: u32,
-    framebuffer_height: u32,
-    layouts: Vec<&B::DescriptorSetLayout>,
-) -> Result<(B::GraphicsPipeline, B::PipelineLayout), failure::Error> {
-    let pipeline_layout = unsafe {
-        factory
-            .device()
-            .create_pipeline_layout(layouts, None as Option<(_, _)>)
-    }?;
+impl<B> SimpleGraphicsPipeline<B, World> for Pipeline<B>
+where
+    B: hal::Backend,
+{
+    type Desc = PipelineDesc;
 
-    // get shaders
-    let shader_vertex = unsafe { VERTEX.module(factory).unwrap() };
-    let shader_fragment = unsafe { FRAGMENT.module(factory).unwrap() };
-
-    // build the pipeline
-    let pipes = PipelinesBuilder::new()
-        .with_pipeline(
-            PipelineDescBuilder::new()
-                .with_vertex_desc(&[(FXAAVertexArgs::vertex(), pso::VertexInputRate::Vertex)])
-                .with_shaders(util::simple_shader_set(
-                    &shader_vertex,
-                    Some(&shader_fragment),
-                ))
-                .with_layout(&pipeline_layout)
-                .with_subpass(subpass)
-                .with_framebuffer_size(framebuffer_width, framebuffer_height)
-                .with_face_culling(pso::Face::BACK)
-                .with_blend_targets(vec![pso::ColorBlendDesc {
-                    mask: pso::ColorMask::ALL,
-                    blend: None,
-                }])
-        )
-        .build(factory, None);
-    
-    // destroy the shaders when loaded
-    unsafe {
-        factory.destroy_shader_module(shader_vertex);
-        factory.destroy_shader_module(shader_fragment);
-    }
-
-    // handle errors and return
-    match pipes {
-        Err(e) => {
-            unsafe {
-                factory.device().destroy_pipeline_layout(pipeline_layout);
-            }
-            Err(e)
-        }
-        Ok(mut pipes) => Ok((pipes.remove(0), pipeline_layout)),
-    }
-}
-
-
-/// Required to send data into the shader.
-/// These names must match the shader.
-impl AsVertex for FXAAVertexArgs {
-    fn vertex() -> VertexFormat {
-        VertexFormat::new((
-            (Format::Rg32Sfloat, "position"),
-            (Format::Rg32Sfloat, "tex_coord"),
-        ))
-    }
-}
-
-// implementation of the render pass
-#[derive(Debug)]
-pub struct DrawFXAA<B: Backend> {
-    pipeline: B::GraphicsPipeline,
-    pipeline_layout: B::PipelineLayout,
-    vertex_buffer: Escape<Buffer<B>>,
-    env: DynamicUniform<B, FXAAUniformArgs>,
-    texture_set: Escape<DescriptorSet<B>>,
-    view: Escape<ImageView<B>>,
-    sampler: Escape<Sampler<B>>,
-    image: RendyHandle<Image<B>>,
-}
-
-impl<B: Backend> RenderGroup<B, World> for DrawFXAA<B> {
     fn prepare(
         &mut self,
         factory: &Factory<B>,
         _queue: QueueId,
+        _set_layouts: &[RendyHandle<DescriptorSetLayout<B>>],
         index: usize,
-        _subpass: hal::pass::Subpass<B>,
         world: &World,
     ) -> PrepareResult {
-        // write screen dimensions to the uniform
         let dimensions = world.read_resource::<ScreenDimensions>();
         let fxaa_settings = world.read_resource::<crate::FxaaSettings>();
-        self.env.write(factory, index, FXAAUniformArgs {
-            screen_width: dimensions.width(),
-            screen_height: dimensions.height(),
-            enabled: fxaa_settings.enabled.into(),
-        }.std140());
 
-        //PrepareResult::DrawReuse
+        // write to the uniform
+        unsafe {
+            factory
+                .upload_visible_buffer(
+                    &mut self.buffer,
+                    self.settings.uniform_offset(index as u64),
+                    &[FXAAUniformArgs {
+                        screen_width: dimensions.width(),
+                        screen_height: dimensions.height(),
+                        enabled: fxaa_settings.enabled.into(),
+                    }.std140()],
+                )
+                .unwrap()
+        };
+        
         PrepareResult::DrawRecord
     }
 
-    fn draw_inline(
+    fn draw(
         &mut self,
+        layout: &B::PipelineLayout,
         mut encoder: RenderPassEncoder<'_, B>,
         index: usize,
-        _subpass: hal::pass::Subpass<'_, B>,
-        _resources: &World,
+        _world: &World,
     ) {
-        let layout = &self.pipeline_layout;
-        let encoder = &mut encoder;
-
-        // bind encoder
-        encoder.bind_graphics_pipeline(&self.pipeline);
-
-        // bind the dynamic uniform buffer
-        self.env.bind(index, layout, 0, encoder);
-
         unsafe {
-            // bind texture descriptor
-            encoder.bind_graphics_descriptor_sets(layout, 1, Some(self.texture_set.raw()), std::iter::empty());
+            encoder.bind_graphics_descriptor_sets(
+                layout,
+                0,
+                Some(&self.sets[index]),
+                std::iter::empty(),
+            );
 
-            // bind vertex buffer
             encoder.bind_vertex_buffers(0, Some((self.vertex_buffer.raw(), 0)));
 
-            // and draw
             encoder.draw(0..6, 0..1);
         }
     }
 
-    fn dispose(self: Box<Self>, factory: &mut Factory<B>, _aux: &World) {
+    fn dispose(mut self, factory: &mut Factory<B>, _world: &World) {
         unsafe {
-            factory.device().destroy_graphics_pipeline(self.pipeline);
-            factory.device().destroy_pipeline_layout(self.pipeline_layout);
+            self.descriptor_pool.reset();
+            factory.destroy_descriptor_pool(self.descriptor_pool);
         }
     }
 }
