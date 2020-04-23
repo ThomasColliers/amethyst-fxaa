@@ -1,5 +1,4 @@
 mod fxaa;
-mod offscreen;
 mod graph;
 
 use amethyst::{
